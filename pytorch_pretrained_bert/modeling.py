@@ -1131,7 +1131,6 @@ class BertForPreTrainingLossMask(PreTrainedBertModel):
             vis_pretext_loss = torch.cat(vis_pretext_loss).mean()
         else:
             vis_pretext_loss = masked_lm_loss.new(1).fill_(0)
-
         if self.tasks == 'vqa2':
             assert(ans_labels is not None)
             # vqa2_embed = pooled_output
@@ -1186,7 +1185,7 @@ class BertForSeq2SeqDecoder(PreTrainedBertModel):
                                        nn.Dropout(config.hidden_dropout_prob))
 
 
-    def forward(self, vis_feats, vis_pe, input_ids, token_type_ids, position_ids, attention_mask, task_idx=None, sample_mode='greedy'):
+    def forward(self, vis_feats, vis_pe, input_ids, token_type_ids, position_ids, attention_mask, task_idx=None, sample_mode='greedy', seed_ids=None):
 
         vis_feats = self.vis_embed(vis_feats) # image region features
         vis_pe = self.vis_pe_embed(vis_pe) # image region positional encodings
@@ -1206,7 +1205,7 @@ class BertForSeq2SeqDecoder(PreTrainedBertModel):
         curr_ids = input_ids
         mask_ids = input_ids[:, :1] * 0 + self.mask_word_id
         next_pos = input_length
-
+        tokens_generated = 0
         while next_pos < output_length:
             curr_length = list(curr_ids.size())[1]
             start_pos = next_pos - curr_length
@@ -1224,6 +1223,7 @@ class BertForSeq2SeqDecoder(PreTrainedBertModel):
             last_hidden = new_encoded_layers[-1][:, -1:, :]
             prediction_scores, _ = self.cls(
                 last_hidden, None, task_idx=task_idx)
+            
             if sample_mode == 'greedy':
                 max_probs, max_ids = torch.max(prediction_scores, dim=-1)
             elif sample_mode == 'sample':
@@ -1235,6 +1235,10 @@ class BertForSeq2SeqDecoder(PreTrainedBertModel):
                     1, max_ids) # this should be logprobs
             else:
                 raise NotImplementedError
+
+            if seed_ids and tokens_generated < len(seed_ids):
+                max_ids[:] = seed_ids[tokens_generated]
+
             output_ids.append(max_ids)
             output_probs.append(max_probs)
             if prev_embedding is None:
@@ -1250,10 +1254,11 @@ class BertForSeq2SeqDecoder(PreTrainedBertModel):
                                        for x in zip(prev_encoded_layers, new_encoded_layers)]
             curr_ids = max_ids
             next_pos += 1
+            tokens_generated += 1
         return torch.cat(output_ids, dim=1), torch.cat(output_probs, dim=1)
 
 
-    def beam_search(self, vis_feats, vis_pe, input_ids, token_type_ids, position_ids, attention_mask, task_idx=None):
+    def beam_search(self, vis_feats, vis_pe, input_ids, token_type_ids, position_ids, attention_mask, task_idx=None, seed_ids=None):
 
         input_shape = list(input_ids.size())
         batch_size = input_shape[0]
@@ -1267,6 +1272,7 @@ class BertForSeq2SeqDecoder(PreTrainedBertModel):
         curr_ids = input_ids
         mask_ids = input_ids[:, :1] * 0 + self.mask_word_id
         next_pos = input_length
+        tokens_generated = 0
 
         K = self.search_beam_size
 

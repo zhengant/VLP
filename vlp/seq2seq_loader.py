@@ -322,9 +322,9 @@ class Preprocess4Seq2seq(Pipeline):
             img_id = img_path.split('/')[-1].split('.')[0]
             if self.region_det_file_prefix != '':
                 # read data from h5 files
-                with h5py.File(self.region_det_file_prefix+'_feat'+img_id[-3:] +'.h5', 'r') as region_feat_f, \
-                        h5py.File(self.region_det_file_prefix+'_cls'+img_id[-3:] +'.h5', 'r') as region_cls_f, \
-                        h5py.File(self.region_bbox_file, 'r') as region_bbox_f:
+                with h5py.File(self.region_det_file_prefix+'_feat'+'all'+'.h5', 'r') as region_feat_f, \
+                        h5py.File(self.region_det_file_prefix+'_cls'+'all'+'.h5', 'r') as region_cls_f, \
+                        h5py.File(self.region_bbox_file+'all'+'.h5', 'r') as region_bbox_f:
                     img = torch.from_numpy(region_feat_f[img_id][:]).float()
                     cls_label = torch.from_numpy(region_cls_f[img_id][:]).float()
                     vis_pe = torch.from_numpy(region_bbox_f[img_id][:])
@@ -443,9 +443,9 @@ class Preprocess4Seq2seqDecoder(Pipeline):
             img_id = img_path.split('/')[-1].split('.')[0]
             if self.region_det_file_prefix != '':
                 # read data from h5 files
-                with h5py.File(self.region_det_file_prefix+'_feat'+img_id[-3:] +'.h5', 'r') as region_feat_f, \
-                        h5py.File(self.region_det_file_prefix+'_cls'+img_id[-3:] +'.h5', 'r') as region_cls_f, \
-                        h5py.File(self.region_bbox_file, 'r') as region_bbox_f:
+                with h5py.File(self.region_det_file_prefix+'_feat'+'all'+'.h5', 'r') as region_feat_f, \
+                        h5py.File(self.region_det_file_prefix+'_cls'+'all'+'.h5', 'r') as region_cls_f, \
+                        h5py.File(self.region_bbox_file+'all'+'.h5', 'r') as region_bbox_f:
                     img = torch.from_numpy(region_feat_f[img_id][:]).float()
                     cls_label = torch.from_numpy(region_cls_f[img_id][:]).float()
                     vis_pe = torch.from_numpy(region_bbox_f[img_id][:])

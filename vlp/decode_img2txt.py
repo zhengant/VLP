@@ -4,6 +4,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import sys
 import os
 import logging
 import glob
@@ -32,6 +33,13 @@ logger = logging.getLogger(__name__)
 
 # SPECIAL_TOKEN = ["[UNK]", "[PAD]", "[CLS]", "[MASK]"]
 
+SEED_PHRASES = [
+    'MP1 would',
+    'Someone might mistakenly believe that MP1',
+    'Editor created this edit to',
+    'This edit could potentially be used to',
+    'In regards to the edit as a whole, this edit might mislead someone into believing that'
+]
 
 def detokenize(tk_list):
     r_list = []
@@ -108,7 +116,7 @@ def main():
     if args.enable_butd:
         assert(args.len_vis_input == 100)
         args.region_bbox_file = os.path.join(args.image_root, args.region_bbox_file)
-        args.region_det_file_prefix = os.path.join(args.image_root, args.region_det_file_prefix) if args.dataset in ('cc', 'coco') and args.region_det_file_prefix != '' else ''
+        args.region_det_file_prefix = os.path.join(args.image_root, args.region_det_file_prefix) if args.dataset in ('cc', 'coco', 'fake_media') and args.region_det_file_prefix != '' else ''
 
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu")
@@ -198,70 +206,86 @@ def main():
                         src_tk = os.path.join(args.image_root, src.get('filepath', 'trainval'), src['filename'])
                     if args.dataset == 'coco':
                         imgid = int(src['filename'].split('_')[2][:-4])
-                    elif args.dataset == 'cc':
+                    elif args.dataset == 'cc' or args.dataset == 'fake_media':
                         imgid = int(src['imgid'])
                     elif args.dataset == 'flickr30k':
                         imgid = int(src['filename'].split('.')[0])
                     eval_lst.append((img_idx, imgid, src_tk)) # id and path for COCO
                     img_idx += 1
         input_lines = eval_lst
-
-        next_i = 0
-        output_lines = [""] * len(input_lines)
-        total_batch = math.ceil(len(input_lines) / args.batch_size)
+        predictions = {}
 
         print('start the caption evaluation...')
+        total_batch = math.ceil(len(input_lines) / args.batch_size) * len(SEED_PHRASES)
+
+        
+        # output_lines = [""] * len(input_lines)
         with tqdm(total=total_batch) as pbar:
-            while next_i < len(input_lines):
-                _chunk = input_lines[next_i:next_i + args.batch_size]
-                buf_id = [x[0] for x in _chunk]
-                buf = [x[2] for x in _chunk]
-                next_i += args.batch_size
-                instances = []
-                for instance in [(x, args.len_vis_input) for x in buf]:
-                    for proc in bi_uni_pipeline:
-                        instances.append(proc(instance))
-                with torch.no_grad():
-                    batch = batch_list_to_batch_tensors(
-                        instances)
-                    batch = [t.to(device) for t in batch]
-                    input_ids, token_type_ids, position_ids, input_mask, task_idx, img, vis_pe = batch
+            for seed in SEED_PHRASES:
+                seed_ids = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(seed))
+                next_i = 0
+                while next_i < len(input_lines):
+                    _chunk = input_lines[next_i:next_i + args.batch_size]
+                    buf_id = [x[0] for x in _chunk]
+                    buf = [x[2] for x in _chunk]
+                    next_i += args.batch_size
+                    instances = []
+                    for instance in [(x, args.len_vis_input) for x in buf]:
+                        for proc in bi_uni_pipeline:
+                            instances.append(proc(instance))
+                    with torch.no_grad():
+                        batch = batch_list_to_batch_tensors(
+                            instances)
+                        batch = [t.to(device) for t in batch]
+                        input_ids, token_type_ids, position_ids, input_mask, task_idx, img, vis_pe = batch
 
-                    if args.fp16:
-                        img = img.half()
-                        vis_pe = vis_pe.half()
+                        if args.fp16:
+                            img = img.half()
+                            vis_pe = vis_pe.half()
 
-                    if args.enable_butd:
-                        conv_feats = img.data # Bx100x2048
-                        vis_pe = vis_pe.data
-                    else:
-                        conv_feats, _ = cnn(img.data) # Bx2048x7x7
-                        conv_feats = conv_feats.view(conv_feats.size(0), conv_feats.size(1),
-                            -1).permute(0,2,1).contiguous()
+                        if args.enable_butd:
+                            conv_feats = img.data # Bx100x2048
+                            vis_pe = vis_pe.data
+                        else:
+                            conv_feats, _ = cnn(img.data) # Bx2048x7x7
+                            conv_feats = conv_feats.view(conv_feats.size(0), conv_feats.size(1),
+                                -1).permute(0,2,1).contiguous()
 
-                    traces = model(conv_feats, vis_pe, input_ids, token_type_ids,
-                                   position_ids, input_mask, task_idx=task_idx)
-                    if args.beam_size > 1:
-                        traces = {k: v.tolist() for k, v in traces.items()}
-                        output_ids = traces['pred_seq']
-                    else:
-                        output_ids = traces[0].tolist()
-                    for i in range(len(buf)):
-                        w_ids = output_ids[i]
-                        output_buf = tokenizer.convert_ids_to_tokens(w_ids)
-                        output_tokens = []
-                        for t in output_buf:
-                            if t in ("[SEP]", "[PAD]"):
-                                break
-                            output_tokens.append(t)
-                        output_sequence = ' '.join(detokenize(output_tokens))
-                        output_lines[buf_id[i]] = output_sequence
+                        traces = model(conv_feats, vis_pe, input_ids, token_type_ids,
+                                    position_ids, input_mask, task_idx=task_idx, seed_ids=seed_ids)
+                        if args.beam_size > 1:
+                            traces = {k: v.tolist() for k, v in traces.items()}
+                            output_ids = traces['pred_seq']
+                        else:
+                            output_ids = traces[0].tolist()
+                        for i in range(len(buf)):
+                            w_ids = output_ids[i]
+                            output_buf = tokenizer.convert_ids_to_tokens(w_ids)
+                            output_tokens = []
+                            for t in output_buf:
+                                if t in ("[SEP]", "[PAD]"):
+                                    break
+                                output_tokens.append(t)
+                            output_sequence = ' '.join(detokenize(output_tokens))
+                            img_id = input_lines[buf_id[i]][1]
+                            if img_id not in predictions:
+                                predictions[img_id] = [output_sequence]
+                            else:
+                                predictions[img_id].append(output_sequence)
+                            # output_lines[buf_id[i]] = output_sequence
 
-                pbar.update(1)
+                    pbar.update(1)
 
-        predictions = [{'image_id': tup[1], 'caption': output_lines[img_idx]} for img_idx, tup in enumerate(input_lines)]
+        # predictions = [{'image_id': tup[1], 'caption': output_lines[img_idx]} for img_idx, tup in enumerate(input_lines)]
 
-        lang_stats = language_eval(args.dataset, predictions, args.model_recover_path.split('/')[-2]+'-'+args.split+'-'+args.model_recover_path.split('/')[-1].split('.')[-2], args.split)
+        # output captions to file
+        output_dir = os.path.dirname(args.model_recover_path)
+        caption_output_path = os.path.join(output_dir, args.split + '_captions_beam' + str(args.beam_size) + '.json')
+
+        with open(caption_output_path, 'w') as caption_out_fp:
+            json.dump(predictions, caption_out_fp, indent=4)
+
+        # lang_stats = language_eval(args.dataset, predictions, args.model_recover_path.split('/')[-2]+'-'+args.split+'-'+args.model_recover_path.split('/')[-1].split('.')[-2], args.split)
 
 
 if __name__ == "__main__":
