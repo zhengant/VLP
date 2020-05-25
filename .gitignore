@@ -107,3 +107,6 @@ venv.bak/
 vis/
 vis_analysis/
 tmp/
+*.tar.gz
+checkpoints/
+detectron_weights/
